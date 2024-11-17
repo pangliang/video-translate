@@ -6,17 +6,22 @@ import subprocess
 from os import mkdir, makedirs
 
 import json5
+import yt_dlp
+import dotenv
 
 from pathlib import Path
+
+from humanfriendly.terminal import output
 from openai import OpenAI
 from faster_whisper import WhisperModel, BatchedInferencePipeline
+
+dotenv.load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logging.getLogger("faster_whisper").setLevel(logging.DEBUG)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 
 ffmpeg_dir="D:/ffmpeg-6.1.1-essentials_build"
-cache_dir = f".cache"
 
 model_llama3 = "llama3.1:8b"
 model_qwen25_7b = "qwen2.5:7b"
@@ -74,7 +79,7 @@ def ollama_translate(sentences: list) -> list:
         ],
 
     )
-    print(response.choices[0].message.content)
+    logging.info(response.choices[0].message.content)
     return json5.loads(response.choices[0].message.content)
 
 
@@ -162,7 +167,7 @@ def get_whisper_segments(audio: str):
         vad_parameters=dict(offset=0.363, min_silence_duration_ms=500),
     )
 
-    print("Detected language '%s' with probability %f" % (info.language, info.language_probability))
+    logging.info("Detected language '%s' with probability %f" % (info.language, info.language_probability))
 
     whisper_result = [
         {
@@ -176,6 +181,7 @@ def get_whisper_segments(audio: str):
                     "end": word.end
                 } for word in segment.words]
         } for segment in segments]
+    logging.info("whisper finish, segments count: %d" % len(whisper_result))
     return whisper_result
 
 def load_or_execute(file_name, func, *args, **kwargs):
@@ -192,10 +198,12 @@ def load_or_execute(file_name, func, *args, **kwargs):
     dict: 文件内容或闭包的返回结果。
     """
     if os.path.exists(file_name):
+        logging.info("file exists, load %s" % file_name)
         # 文件存在，读取并反序列化
         with open(file_name, 'r', encoding='utf-8') as file:
             return json5.load(file)
     else:
+        logging.info("file not exists, execute %s" % func.__name__)
         # 文件不存在，执行闭包并保存结果
         result = func(*args, **kwargs)
         with open(file_name, 'w', encoding='utf-8') as file:
@@ -256,8 +264,8 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Chinese,SimHei,16,&H00FCD900,&H00000000,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,0,2,10,10,10,1
-Style: English,Arial,12,&H00FFFFFF,&H00000000,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,4,0,2,10,10,10,1
+Style: Chinese,SimHei,18,&H0000D9FC,&H00000000,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,10,10,10,1
+Style: English,Arial,14,&H00FFFFFF,&H00000000,&H00000000,&H80000000,0,1,0,0,100,100,0,0,1,4,1,2,10,10,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -282,7 +290,8 @@ def embed_subtitles(input_video, subtitle_file, output_video):
         f'{ffmpeg_dir}/bin/ffmpeg', '-y',
         '-hwaccel', 'cuda',
         '-i', f'{input_video}',
-        '-vf', f"ass=\\'{subtitle_file}\\'",
+        # '-ss', '2',
+        '-vf', f"subtitles=\\'{subtitle_file}\\'",
         '-threads', '24',
         '-c:v', 'h264_nvenc',
         '-c:a', 'copy',
@@ -297,25 +306,106 @@ def embed_subtitles(input_video, subtitle_file, output_video):
     process.wait()
     logging.info("ffmpeg process completed.")
 
-def process_video(input_video):
+def crop_video(input_video, crop):
+    output_video = os.path.splitext(input_video)[0] + "_cropped.mp4"
+    # 构建 ffmpeg 命令
+    command = [
+        f'{ffmpeg_dir}/bin/ffmpeg', '-y',
+        '-hwaccel', 'cuda',
+        '-i', f'{input_video}',
+        '-vf', f"crop={crop},scale=1280:720",
+        '-threads', '24',
+        '-c:v', 'h264_nvenc',
+        '-c:a', 'copy',
+        '-stats',
+        f'{output_video}'
+    ]
+
+    # 调用 ffmpeg 命令
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    for line in process.stderr:
+        logging.info(line.strip())
+    process.wait()
+    logging.info("ffmpeg process completed.")
+    return output_video
+
+def download_video(vieo_id, output_dir):
+    url = f"https://www.youtube.com/watch?v={vieo_id}"
+    proxy = os.getenv("YT_DLP_PROXY")
+
+    # 配置 yt-dlp 用于提取元信息
+    ydl_opts = {
+        'quiet': True,  # 静默模式，避免冗余输出
+        'skip_download': True,  # 只提取信息，不下载
+        "proxy": proxy,
+    }
+
+    filename = None
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)  # 获取视频信息
+        # 根据模板生成文件名
+        filename = f"{info['title']}.{info['ext'] or 'mp4'}"
+        filename = ydl.prepare_filename(outtmpl= rf"{output_dir}\{filename}", info_dict=info)
+
+    if os.path.exists(filename):
+        return filename
+
+    # 存放下载后文件名
+    downloaded_file = {'filename': None}
+    # 定义回调函数
+    def progress_hook(d):
+        if d['status'] == 'finished':  # 下载完成时获取文件名
+            downloaded_file['filename'] = d['info_dict']['filename']
+
+    resolution = 720
+    yt_options = {
+        'outtmpl': filename,
+        'format': f'bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]',
+        "extractor_retries": 1,
+        "proxy": proxy,
+        'progress_hooks': [progress_hook],
+        'postprocessor_hooks': [progress_hook],
+    }
+    with yt_dlp.YoutubeDL(yt_options) as ydl:
+        ydl.download([url])
+
+    # 返回最终下载文件的路径
+    return downloaded_file['filename']
+
+def process_video(video_id, crop):
+    # 每个视频一个缓存文件夹
+    cache_dir = rf".cache\{video_id}"
     makedirs(name=f"{cache_dir}", mode=755, exist_ok=True)
-    subtitle_file = f"{cache_dir}/subtitle.ass"
 
+    # 下载文件
+    input_video = download_video(video_id, cache_dir)
+
+    # 提取音频文字
     whisper_result = load_or_execute(f"{cache_dir}/whisper_result.json", get_whisper_segments, input_video)
-    segments_analysis = load_or_execute(f"{cache_dir}/ollama_segments_analysis.json", lambda rs: [{**segment, **ollama_segments_analysis(segment["text"])} for segment in rs], whisper_result)
 
+    # 文本分段
+    segments_analysis = load_or_execute(f"{cache_dir}/ollama_segments_analysis.json", lambda rs: [{**segment, **ollama_segments_analysis(segment["text"])} for segment in rs], whisper_result)
     for index, analysis in enumerate(segments_analysis):
         analysis['sentences'] = [{"text": text.strip(), "step1": "", "step2": ""} for text in analysis["split"]]
 
+    # 翻译
     segments_analysis = load_or_execute(f"{cache_dir}/ollama_translate.json", lambda objs: [{**segment, "sentences": ollama_translate(segment["sentences"])} for segment in objs], segments_analysis)
 
+    # 查找句子时间
     for index, analysis in enumerate(segments_analysis):
         analysis['sentences']=find_sentences_times(analysis['sentences'], analysis["words"])
 
+    # 写入字幕文件
+    subtitle_file = f"{cache_dir}/subtitle.ass"
     write_subtitle(segments_analysis, subtitle_file)
 
+    # 如果需要裁剪
+    if crop:
+        input_video = crop_video(input_video, crop)
+
+    # 嵌入字幕
     embed_subtitles(Path(input_video).absolute(), Path(subtitle_file).absolute().as_posix(), rf"{Path(cache_dir).absolute()}\output_video.mp4")
 
 if __name__ == "__main__":
-    file_path = r"g:\Downloads\How Elon Musk found his way into Trump's inner circle [j1A12n8thHY].webm"
-    process_video(file_path)
+    process_video("KYqvqScg_j8", None)
+    # process_video("JuCvnvl2mVA", "1000:562:140:0")
