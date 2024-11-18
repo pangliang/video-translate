@@ -91,8 +91,8 @@ def ollama_segments_analysis(text: str) -> str:
             {
                 "role": "system",
                 "content": """
-                    I have a video subtitle that needs to be split. You need to split the text given in the <input> tag according to punctuation or sentence meaning. 
-                    The key is to ensure that each paragraph has less than 15 words, but it is more important to keep the semantic integrity of a single sentence.
+                    You need to split the text given in the <input> tag according to punctuation or sentence meaning. 
+                    The key is to ensure that each sentence has less than 15 words, but it is more important to keep the semantic integrity of a single sentence.
                     Several examples are provided for your reference in <example>.
                     Please provide your answer in the following <output-format> and without any additional information.
                 """
@@ -147,7 +147,7 @@ def ollama_segments_analysis(text: str) -> str:
 def get_whisper_segments(audio: str):
     # Run on GPU with FP16
     model = WhisperModel(
-        model_size_or_path="./models/faster-whisper-large-v3",
+        model_size_or_path="./models/faster-distil-whisper-large-v3",
         device="cuda",
         compute_type="float16",
         local_files_only=True,
@@ -205,7 +205,14 @@ def load_or_execute(file_name, func, *args, **kwargs):
     else:
         logging.info("file not exists, execute %s" % func.__name__)
         # 文件不存在，执行闭包并保存结果
-        result = func(*args, **kwargs)
+        # 报错就重试, 3次
+        result = None
+        for i in range(3):
+            try:
+                result = func(*args, **kwargs)
+                break
+            except Exception as e:
+                logging.error("execute %s failed, retry %d, error %s" % (func.__name__, i, e))
         with open(file_name, 'w', encoding='utf-8') as file:
             json.dump(result, file, ensure_ascii=False, indent=4)
         return result
@@ -216,18 +223,26 @@ def find_sentences_times(sentences, words):
     for sentence in sentences:
         start_time = None
         end_time = None
+        sentence_pos = 0
+        sentence_text = sentence["text"]
 
-        while word_index < len(words):
+        while word_index < len(words) and sentence_pos < len(sentence_text):
             word_time = words[word_index]
             word = word_time["word"].strip(" ,.!?")
 
-            if word in sentence["text"]:
+            # 查找单词在句子中的位置
+            word_pos = sentence_text.find(word, sentence_pos)
+
+            if word_pos != -1:
                 if start_time is None:
                     start_time = word_time["start"]
                 end_time = word_time["end"]
 
+                # 更新句子位置指针，跳过已匹配的部分
+                sentence_pos = word_pos + len(word)
                 word_index += 1
             elif start_time is None:
+                # 大模型拆句子有可能把某些句子或者单词扔掉了, 先忽略
                 word_index += 1
             else:
                 break
@@ -235,6 +250,8 @@ def find_sentences_times(sentences, words):
         if start_time is not None and end_time is not None:
             sentence["start"] = start_time
             sentence["end"] = end_time
+        else:
+            logging.info("can't find sentence start or end")
     return sentences
 
 def seconds_to_srt_time(seconds):
@@ -284,13 +301,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 f.write(f"Dialogue: 0,{start_time},{end_time},English,,0,0,0,,{english_text}\n")
                 f.write(f"Dialogue: 0,{start_time},{end_time},Chinese,,0,0,0,,{chinese_text}\n")
 
-def embed_subtitles(input_video, subtitle_file, output_video):
+def embed_subtitles(input_video, subtitle_file, output_video, skip_time):
     # 构建 ffmpeg 命令
     command = [
         f'{ffmpeg_dir}/bin/ffmpeg', '-y',
         '-hwaccel', 'cuda',
         '-i', f'{input_video}',
-        # '-ss', '2',
+        '-ss', f'{skip_time}',
         '-vf', f"subtitles=\\'{subtitle_file}\\'",
         '-threads', '24',
         '-c:v', 'h264_nvenc',
@@ -335,7 +352,6 @@ def download_video(vieo_id, output_dir):
 
     # 配置 yt-dlp 用于提取元信息
     ydl_opts = {
-        'quiet': True,  # 静默模式，避免冗余输出
         'skip_download': True,  # 只提取信息，不下载
         "proxy": proxy,
     }
@@ -348,6 +364,7 @@ def download_video(vieo_id, output_dir):
         filename = ydl.prepare_filename(outtmpl= rf"{output_dir}\{filename}", info_dict=info)
 
     if os.path.exists(filename):
+        logging.info(f"文件 {filename} 已存在，跳过下载。")
         return filename
 
     # 存放下载后文件名
@@ -403,9 +420,12 @@ def process_video(video_id, crop):
     if crop:
         input_video = crop_video(input_video, crop)
 
+    # 字幕出现的最早时间
+    start_time = segments_analysis[0]["start"] + 0.5
+
     # 嵌入字幕
-    embed_subtitles(Path(input_video).absolute(), Path(subtitle_file).absolute().as_posix(), rf"{Path(cache_dir).absolute()}\output_video.mp4")
+    embed_subtitles(Path(input_video).absolute(), Path(subtitle_file).absolute().as_posix(), rf"{Path(cache_dir).absolute()}\output_video.mp4", start_time)
 
 if __name__ == "__main__":
-    process_video("KYqvqScg_j8", None)
+    process_video("x2DNUUlGxek", None)
     # process_video("JuCvnvl2mVA", "1000:562:140:0")
