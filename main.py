@@ -35,114 +35,124 @@ client = OpenAI(
 
 def ollama_translate(sentences: list) -> list:
     json_text = json5.dumps(sentences)
-    response = client.chat.completions.create(
-        model=model,
-        # temperature=0.5,
-        messages=[
-            {
-                "role": "system",
-                "content": """
-                    You are a professional, real translation engine. You will be given input and steps to follow to translate the text without any explanation.
-                    Please provide your answer in the following <output-format> and without any additional information.
-                """
-            },
-            {
-                "role": "user",
-                "content": f"""
-                     <input>
-                         {json_text}
-                     </input>
-                     
-                     <output-format>
-                         [
-                            {{
-                                "text": "<<original text in english>>",
-                                "step1": "<<translated text in chinese>>",
-                                "step2": "<<refined translation in chinese>>"
-                            }},
-                            {{
-                                "text": "<<original text in english>>",
-                                "step1": "<<translated text in chinese>>",
-                                "step2": "<<refined translation in chinese>>"
-                            }},
-                            ...
-                         ]
-                     </output-format>
-                     
-                     <steps>
-                        1. Extract the content from the "text" field in the provided json object. Keep the original english text in the "text" field.
-                        2. Translate the extracted content into chinese and place into the "step1" field.
-                        3. Refine the initial translation from "step1" to make it more natural and understandable in chinese. Place this refined translation into the "step2" field.
-                     </steps>
-                """
-            },
-        ],
+    messages=[
+        {
+            "role": "system",
+            "content": """
+                You are a professional, real translation engine. You will be given input and steps to follow to translate the text without any explanation.
+                Please provide your answer in the following <output-format> and without any additional information.
+            """
+        },
+        {
+            "role": "user",
+            "content": f"""
+                 <input>
+                     {json_text}
+                 </input>
+                 
+                 <output-format>
+                     [
+                        {{
+                            "text": "<<original text in english>>",
+                            "step1": "<<translated text in chinese>>",
+                            "step2": "<<refined translation in chinese>>"
+                        }},
+                        {{
+                            "text": "<<original text in english>>",
+                            "step1": "<<translated text in chinese>>",
+                            "step2": "<<refined translation in chinese>>"
+                        }},
+                        ...
+                     ]
+                 </output-format>
+                 
+                 <steps>
+                    1. Extract the content from the "text" field in the provided json object. Keep the original english text in the "text" field.
+                    2. Translate the extracted content into chinese and place into the "step1" field.
+                    3. Refine the initial translation from "step1" to make it more natural and understandable in chinese. Place this refined translation into the "step2" field.
+                 </steps>
+            """
+        },
+    ]
 
-    )
-    logging.info(response.choices[0].message.content)
-    return json5.loads(response.choices[0].message.content)
+    # 如果报错, 重试3次
+    for i in range(3):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                # temperature=0.5,
+                messages=messages,
+            )
+            logging.info(response.choices[0].message.content)
+            return json5.loads(response.choices[0].message.content)
+        except Exception as e:
+            logging.error("execute ollama_translate failed, retry %d, error %s" % (i, e))
 
 
 def ollama_segments_analysis(text: str) -> str:
-    response = client.chat.completions.create(
-        model=model,
-        # temperature=0.8,
-        messages=[
-            {
-                "role": "system",
-                "content": """
-                    You need to split the text given in the <input> tag according to punctuation or sentence meaning. 
-                    The key is to ensure that each sentence has less than 15 words, but it is more important to keep the semantic integrity of a single sentence.
-                    Several examples are provided for your reference in <example>.
-                    Please provide your answer in the following <output-format> and without any additional information.
-                """
-            },
-            {
-                "role": "user",
-                "content": f"""
-                    <input>
-                        {text}
-                    </input>
-                    <output-format>
-                        {{
-                            "split": ["<<Output each sentence in sequence.>>"]
-                        }}
-                    </output-format>
-                    <rules>
-                        1. First segment the text at punctuation marks, such as period, comma, question mark, etc. (such as ",", ".", "?", "!" etc.)
-                        2. You can also segment at conjunctions (such as "and", "but", "because", "when", "then", "if", "so", "that"). 
-                        3. It can also be divided according to sentence structure, such as long inverted sentences, subordinate clauses, etc.
-                        4. Output each sentence in sequence. For example, ["this is the first part,", "this is the second part."]
-                    </rules>
-                    <examples>
-                        <example>
-                            <input>
-                                By now you know that I am the developer of the ConfUI IP Adapter extension and now also of the Instant ID one. Instant ID is a style transfer model targeted to people's portraits. Be careful because there are many Instant ID extensions in the manager, but mine is the only native one, meaning that it is fully
-                            </input>
-                            <output>
-                                {{
-                                    "split": ["By now you know that", "I am the developer of the ConfUI IP Adapter extension", "and now also of the Instant ID one.", "Instant ID is a style transfer model targeted to people's portraits.", "Be careful because there are many Instant ID extensions in the manager,", "but mine is the only native one,", "meaning that it is fully"]
-                                }}
-                            </output>
-                        </example>
-                        <example>
-                            <input>
-                                By now you know that I am the developer of the ConfUI IP Adapter extension and now also of the Instant ID one. Instant ID is a style transfer model targeted to people's portraits. Be careful because there are many Instant ID extensions in the manager, but mine is the only native one, meaning that it is fully
-                            </input>
-                            <output>
-                                {{
-                                    "split": ["By now you know that", "I am the developer of the ConfUI IP Adapter extension", "and now also of the Instant ID one.", "Instant ID is a style transfer model targeted to people's portraits.", "Be careful because there are many Instant ID extensions in the manager,", "but mine is the only native one,", "meaning that it is fully"]
-                                }}
-                            </output>
-                        </example>
-                    </examples>
-                """.strip()
-            },
-        ],
-
-    )
-    logging.info(response.choices[0].message.content)
-    return json5.loads(response.choices[0].message.content)
+    messages=[
+        {
+            "role": "system",
+            "content": """
+                You need to split the text given in the <input> tag according to punctuation or sentence meaning. 
+                The key is to ensure that each sentence has less than 15 words, but it is more important to keep the semantic integrity of a single sentence.
+                Several examples are provided for your reference in <example>.
+                Please provide your answer in the following <output-format> and without any additional information.
+            """
+        },
+        {
+            "role": "user",
+            "content": f"""
+                <input>
+                    {text}
+                </input>
+                <output-format>
+                    {{
+                        "split": ["<<Output each sentence in sequence.>>"]
+                    }}
+                </output-format>
+                <rules>
+                    1. First segment the text at punctuation marks, such as period, comma, question mark, etc. (such as ",", ".", "?", "!" etc.)
+                    2. You can also segment at conjunctions (such as "and", "but", "because", "when", "then", "if", "so", "that"). 
+                    3. It can also be divided according to sentence structure, such as long inverted sentences, subordinate clauses, etc.
+                    4. Output each sentence in sequence. For example, ["this is the first part,", "this is the second part."]
+                </rules>
+                <examples>
+                    <example>
+                        <input>
+                            By now you know that I am the developer of the ConfUI IP Adapter extension and now also of the Instant ID one. Instant ID is a style transfer model targeted to people's portraits. Be careful because there are many Instant ID extensions in the manager, but mine is the only native one, meaning that it is fully
+                        </input>
+                        <output>
+                            {{
+                                "split": ["By now you know that", "I am the developer of the ConfUI IP Adapter extension", "and now also of the Instant ID one.", "Instant ID is a style transfer model targeted to people's portraits.", "Be careful because there are many Instant ID extensions in the manager,", "but mine is the only native one,", "meaning that it is fully"]
+                            }}
+                        </output>
+                    </example>
+                    <example>
+                        <input>
+                            By now you know that I am the developer of the ConfUI IP Adapter extension and now also of the Instant ID one. Instant ID is a style transfer model targeted to people's portraits. Be careful because there are many Instant ID extensions in the manager, but mine is the only native one, meaning that it is fully
+                        </input>
+                        <output>
+                            {{
+                                "split": ["By now you know that", "I am the developer of the ConfUI IP Adapter extension", "and now also of the Instant ID one.", "Instant ID is a style transfer model targeted to people's portraits.", "Be careful because there are many Instant ID extensions in the manager,", "but mine is the only native one,", "meaning that it is fully"]
+                            }}
+                        </output>
+                    </example>
+                </examples>
+            """.strip()
+        },
+    ]
+    for i in range(3):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                # temperature=0.8,
+                messages=messages,
+            )
+            logging.info(response.choices[0].message.content)
+            return json5.loads(response.choices[0].message.content)
+        except Exception as e:
+            logging.error("execute ollama_translate failed, retry %d, error %s" % (i, e))
 
 def get_whisper_segments(audio: str):
     # Run on GPU with FP16
@@ -206,13 +216,7 @@ def load_or_execute(file_name, func, *args, **kwargs):
         logging.info("file not exists, execute %s" % func.__name__)
         # 文件不存在，执行闭包并保存结果
         # 报错就重试, 3次
-        result = None
-        for i in range(3):
-            try:
-                result = func(*args, **kwargs)
-                break
-            except Exception as e:
-                logging.error("execute %s failed, retry %d, error %s" % (func.__name__, i, e))
+        result = func(*args, **kwargs)
         with open(file_name, 'w', encoding='utf-8') as file:
             json.dump(result, file, ensure_ascii=False, indent=4)
         return result
@@ -292,7 +296,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 start_time = seconds_to_srt_time(sub["start"])
                 end_time = seconds_to_srt_time(sub["end"])
                 english_text = sub["text"]
-                chinese_text = sub["step2"]
+                chinese_text = sub["step1"] if sub.get("step2", "") == "" else sub["step2"]
                 # 将标点符号后面追加 \N
                 chinese_text = re.sub(r'([，。、！？）,.!?’])', '\\1 ', chinese_text)
                 mid_index = len(chinese_text) // 2
@@ -359,6 +363,11 @@ def download_video(vieo_id, output_dir):
     filename = None
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)  # 获取视频信息
+        logging.info({
+            "title": info['title'],
+            "thumbnail": info['thumbnail'],
+        })
+
         # 根据模板生成文件名
         filename = f"{info['title']}.{info['ext'] or 'mp4'}"
         filename = ydl.prepare_filename(outtmpl= rf"{output_dir}\{filename}", info_dict=info)
@@ -427,5 +436,5 @@ def process_video(video_id, crop):
     embed_subtitles(Path(input_video).absolute(), Path(subtitle_file).absolute().as_posix(), rf"{Path(cache_dir).absolute()}\output_video.mp4", start_time)
 
 if __name__ == "__main__":
-    process_video("x2DNUUlGxek", None)
-    # process_video("JuCvnvl2mVA", "1000:562:140:0")
+    process_video("8pfr14HhPtg", None)
+    # process_video("JuCvnvl2mVA", "3840:2176:0:0")
