@@ -11,7 +11,6 @@ import dotenv
 
 from pathlib import Path
 
-from humanfriendly.terminal import output
 from openai import OpenAI
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 
@@ -39,8 +38,8 @@ def ollama_translate(sentences: list) -> list:
         {
             "role": "system",
             "content": """
-                You are a professional, real translation engine. You will be given input and steps to follow to translate the text without any explanation.
-                Please provide your answer in the following <output-format> and without any additional information.
+                    You are a professional, real translation engine. Strictly follow the rules given in <rule>. You will be given input and steps to follow to translate the text without any explanation.
+                    Please provide your answer in the following <output-format> and without any additional information.
             """
         },
         {
@@ -71,6 +70,13 @@ def ollama_translate(sentences: list) -> list:
                     2. Translate the extracted content into chinese and place into the "step1" field.
                     3. Refine the initial translation from "step1" to make it more natural and understandable in chinese. Place this refined translation into the "step2" field.
                  </steps>
+                 
+                 <rules>
+                    1. Do output LaTeX. 
+                    2. Do not output something like '\\(x\\)'. 
+                    3. Do not split professional vocabulary. 
+                    4. Do not translate or modify proprietary words, program variables, function names. such as 'y_hat', 'f(x)', 'f(x)=wx+b'. 
+                 </rules>
             """
         },
     ]
@@ -255,7 +261,7 @@ def find_sentences_times(sentences, words):
             sentence["start"] = start_time
             sentence["end"] = end_time
         else:
-            logging.info("can't find sentence start or end")
+            logging.info(f"can't find sentence start or end: {sentence}")
     return sentences
 
 def seconds_to_srt_time(seconds):
@@ -281,12 +287,12 @@ Title: Untitled
 ScriptType: v4.00+
 Collisions: Normal
 PlayDepth: 0
-WrapStyle: 0
+WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Chinese,SimHei,18,&H0000D9FC,&H00000000,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,10,10,10,1
-Style: English,Arial,14,&H00FFFFFF,&H00000000,&H00000000,&H80000000,0,1,0,0,100,100,0,0,1,4,1,2,10,10,10,1
+Style: Chinese,SimHei,14,&H0000D9FC,&H00000000,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,10,10,10,0
+Style: English,Arial,12,&H00FFFFFF,&H00000000,&H00000000,&H80000000,0,1,0,0,100,100,0,0,1,4,1,2,10,10,10,0
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -294,16 +300,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for index, analysis in enumerate(segments_analysis):
             for i, sub in enumerate(analysis['sentences']):
                 start_time = seconds_to_srt_time(sub["start"])
-                end_time = seconds_to_srt_time(sub["end"])
+                if i + 1 < len(analysis['sentences']):
+                    end_time = seconds_to_srt_time(analysis['sentences'][i + 1]["start"])
+                elif index + 1 < len(segments_analysis):
+                    end_time = seconds_to_srt_time(segments_analysis[index + 1]['sentences'][0]["start"])
+                else:
+                    end_time = seconds_to_srt_time(sub["end"])
                 english_text = sub["text"]
                 chinese_text = sub["step1"] if sub.get("step2", "") == "" else sub["step2"]
                 # 将标点符号后面追加 \N
-                chinese_text = re.sub(r'([，。、！？）,.!?’])', '\\1 ', chinese_text)
+                chinese_text = re.sub(r'([，。、！？）：,.!?:’])', '\\1 ', chinese_text)
                 mid_index = len(chinese_text) // 2
                 chinese_text = chinese_text[:mid_index] + ' ' + chinese_text[mid_index:] if len(chinese_text) > 35 and ' ' not in chinese_text else chinese_text
 
-                f.write(f"Dialogue: 0,{start_time},{end_time},English,,0,0,0,,{english_text}\n")
-                f.write(f"Dialogue: 0,{start_time},{end_time},Chinese,,0,0,0,,{chinese_text}\n")
+                f.write(f"Dialogue: 0,{start_time},{end_time},English,,0,0,0,,{{\\fad(100,100)}}{english_text}\n")
+                f.write(f"Dialogue: 0,{start_time},{end_time},Chinese,,0,0,0,,{{\\fad(100,100)}}{chinese_text}\n")
 
 def embed_subtitles(input_video, subtitle_file, output_video, skip_time):
     # 构建 ffmpeg 命令
@@ -398,6 +409,21 @@ def download_video(vieo_id, output_dir):
     # 返回最终下载文件的路径
     return downloaded_file['filename']
 
+def flat_playlist(playlist_id):
+    playlist_url = f"https://www.youtube.com/playlist?list={playlist_id}"
+    proxy = os.getenv("YT_DLP_PROXY")
+
+    # 配置 yt-dlp 用于提取元信息
+    ydl_opts = {
+        'skip_download': True,  # 只提取信息，不下载
+        'extract_flat': True,
+        "proxy": proxy,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        playlist_info = ydl.extract_info(playlist_url, download=False)
+        if 'entries' in playlist_info:
+            return [entry for entry in playlist_info['entries']]
+
 def process_video(video_id, crop):
     # 每个视频一个缓存文件夹
     cache_dir = rf".cache\{video_id}"
@@ -430,11 +456,15 @@ def process_video(video_id, crop):
         input_video = crop_video(input_video, crop)
 
     # 字幕出现的最早时间
-    start_time = segments_analysis[0]["start"] + 0.5
-
+    start_time = 0
     # 嵌入字幕
     embed_subtitles(Path(input_video).absolute(), Path(subtitle_file).absolute().as_posix(), rf"{Path(cache_dir).absolute()}\output_video.mp4", start_time)
 
 if __name__ == "__main__":
-    process_video("8pfr14HhPtg", None)
-    # process_video("JuCvnvl2mVA", "3840:2176:0:0")
+    # video_info_list = flat_playlist("")
+    # print([video_info['id'] for video_info in video_info_list])
+
+    ids = [
+    ]
+    for id in ids:
+        process_video(id, None)
