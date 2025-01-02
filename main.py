@@ -100,6 +100,7 @@ def ollama_segments_analysis(text: str) -> str:
         {
             "role": "system",
             "content": """
+                Your task is to split the provided sentence into shorter sentences so that they can be displayed in the video subtitles.
                 You need to split the text given in the <input> tag according to punctuation or sentence meaning. 
                 The key is to ensure that each sentence has less than 15 words, but it is more important to keep the semantic integrity of a single sentence.
                 Several examples are provided for your reference in <example>.
@@ -118,6 +119,7 @@ def ollama_segments_analysis(text: str) -> str:
                     }}
                 </output-format>
                 <rules>
+                    0. Your task is to split the provided sentence into shorter sentences so that they can be displayed in the video subtitles.
                     1. First segment the text at punctuation marks, such as period, comma, question mark, etc. (such as ",", ".", "?", "!" etc.)
                     2. You can also segment at conjunctions (such as "and", "but", "because", "when", "then", "if", "so", "that"). 
                     3. It can also be divided according to sentence structure, such as long inverted sentences, subordinate clauses, etc.
@@ -368,7 +370,7 @@ def download_video(vieo_id, output_dir):
     # 配置 yt-dlp 用于提取元信息
     ydl_opts = {
         'skip_download': True,  # 只提取信息，不下载
-        "proxy": proxy,
+        'proxy': proxy,
     }
 
     filename = None
@@ -457,14 +459,29 @@ def process_video(video_id, crop):
 
     # 字幕出现的最早时间
     start_time = 0
+
+    input_video_base_name = os.path.splitext(input_video)[0]
+
+    # 去除 ‘.cache\\ggWLvh484hs\\’, 'ggWLvh484hs'可能为任意内容
+    input_video_base_name = re.sub(r'^\.cache\\.+?\\', '', input_video_base_name)
+    input_video_base_name = re.sub(r'[\'#]', '', input_video_base_name)
+    input_video_base_name = input_video_base_name.strip()
+    logging.info(f"input_video_base_name: {input_video_base_name}")
+
+    title_translate = ollama_translate([{"text": input_video_base_name.strip(), "step1": "", "step2": ""}])
+    output_video_base_name = title_translate[0]['step2']
+
     # 嵌入字幕
-    embed_subtitles(Path(input_video).absolute(), Path(subtitle_file).absolute().as_posix(), rf"{Path(cache_dir).absolute()}\output_video.mp4", start_time)
+    embed_subtitles(Path(input_video).absolute(), Path(subtitle_file).absolute().as_posix(), rf"{Path(cache_dir).absolute()}\{output_video_base_name}.mp4", start_time)
+
+    return
 
 if __name__ == "__main__":
     # video_info_list = flat_playlist("")
     # print([video_info['id'] for video_info in video_info_list])
 
     ids = [
+        '_HcH1gjKmuA',
     ]
     for id in ids:
         process_video(id, None)
