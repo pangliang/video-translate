@@ -32,8 +32,8 @@ client = OpenAI(
     api_key='ollama',
 )
 
-def ollama_translate(sentences: list) -> list:
-    json_text = json5.dumps(sentences)
+def ollama_translate(sentences: list, language_from='english', language_to='chinese') -> list:
+    json_text = json5.dumps(sentences, ensure_ascii=False)
     messages=[
         {
             "role": "system",
@@ -52,23 +52,23 @@ def ollama_translate(sentences: list) -> list:
                  <output-format>
                      [
                         {{
-                            "text": "<<original text in english>>",
-                            "step1": "<<translated text in chinese>>",
-                            "step2": "<<refined translation in chinese>>"
+                            "text": "<<original text in {language_from}>>",
+                            "step1": "<<translated text in {language_to}>>",
+                            "step2": "<<refined translation in {language_to}>>"
                         }},
                         {{
-                            "text": "<<original text in english>>",
-                            "step1": "<<translated text in chinese>>",
-                            "step2": "<<refined translation in chinese>>"
+                            "text": "<<original text in {language_from}>>",
+                            "step1": "<<translated text in {language_to}>>",
+                            "step2": "<<refined translation in {language_to}>>"
                         }},
                         ...
                      ]
                  </output-format>
                  
                  <steps>
-                    1. Extract the content from the "text" field in the provided json object. Keep the original english text in the "text" field.
-                    2. Translate the extracted content into chinese and place into the "step1" field.
-                    3. Refine the initial translation from "step1" to make it more natural and understandable in chinese. Place this refined translation into the "step2" field.
+                    1. Extract the content from the "text" field in the provided json object. Keep the original {language_from} text in the "text" field.
+                    2. Translate the extracted content into {language_to} and place into the "step1" field.
+                    3. Refine the initial translation from "step1" to make it more natural and understandable in {language_to}. Place this refined translation into the "step2" field.
                  </steps>
                  
                  <rules>
@@ -162,27 +162,39 @@ def ollama_segments_analysis(text: str) -> str:
         except Exception as e:
             logging.error("execute ollama_translate failed, retry %d, error %s" % (i, e))
 
-def get_whisper_segments(audio: str):
+def get_whisper_segments(audio: str, language_from="english"):
+    language_map = {
+        "english": "en",
+        "japanese": "ja"
+    }
+    language = language_map.get(language_from, "en")
+
+    model_map = {
+        "english": "./models/faster-distil-whisper-large-v3",
+        "japanese": "./models/faster-whisper-large-v3"
+    }
+    model_path = model_map.get(language_from, "./models/faster-whisper-large-v3")
+
     # Run on GPU with FP16
     model = WhisperModel(
-        model_size_or_path="./models/faster-distil-whisper-large-v3",
+        model_size_or_path=model_path,
         device="cuda",
         compute_type="float16",
         local_files_only=True,
         # num_workers=4,
     )
 
-    batched_model = BatchedInferencePipeline(model=model, language="en", )
+    batched_model = BatchedInferencePipeline(model=model, )
     segments, info = batched_model.transcribe(
         audio=audio,
         word_timestamps=True,
         batch_size=16,
-        language="en",
+        language=language,
         length_penalty=1,
         beam_size=5,
         # max_new_tokens=10,
         vad_filter=True,
-        vad_parameters=dict(offset=0.363, min_silence_duration_ms=500),
+        vad_parameters=dict(min_silence_duration_ms=500),
     )
 
     logging.info("Detected language '%s' with probability %f" % (info.language, info.language_probability))
@@ -293,8 +305,8 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Chinese,SimHei,14,&H0000D9FC,&H00000000,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,10,10,10,0
-Style: English,Arial,12,&H00FFFFFF,&H00000000,&H00000000,&H80000000,0,1,0,0,100,100,0,0,1,4,1,2,10,10,10,0
+Style: Chinese,Source Sans Pro,18,&H0000D9FC,&H00000000,&H00000000,&H40000000,1,0,0,0,100,100,0,0,4,3,1,2,0,0,10,0
+Style: English,Source Sans Pro,14,&H00FFFFFF,&H00000000,&H00000000,&H40000000,1,1,0,0,100,100,0,0,4,3,1,2,0,0,10,0
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -311,7 +323,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 english_text = sub["text"]
                 chinese_text = sub["step1"] if sub.get("step2", "") == "" else sub["step2"]
                 # 将标点符号后面追加 \N
-                chinese_text = re.sub(r'([，。、！？）：,.!?:’])', '\\1 ', chinese_text)
+                chinese_text = re.sub(r'([，。、！？）：,.!?:’])(?=.)', '\\1 ', chinese_text)
                 mid_index = len(chinese_text) // 2
                 chinese_text = chinese_text[:mid_index] + ' ' + chinese_text[mid_index:] if len(chinese_text) > 35 and ' ' not in chinese_text else chinese_text
 
@@ -426,7 +438,7 @@ def flat_playlist(playlist_id):
         if 'entries' in playlist_info:
             return [entry for entry in playlist_info['entries']]
 
-def process_video(video_id, crop):
+def process_video(video_id, language_from='english'):
     # 每个视频一个缓存文件夹
     cache_dir = rf".cache\{video_id}"
     makedirs(name=f"{cache_dir}", mode=755, exist_ok=True)
@@ -435,7 +447,7 @@ def process_video(video_id, crop):
     input_video = download_video(video_id, cache_dir)
 
     # 提取音频文字
-    whisper_result = load_or_execute(f"{cache_dir}/whisper_result.json", get_whisper_segments, input_video)
+    whisper_result = load_or_execute(f"{cache_dir}/whisper_result.json", get_whisper_segments, input_video, language_from)
 
     # 文本分段
     segments_analysis = load_or_execute(f"{cache_dir}/ollama_segments_analysis.json", lambda rs: [{**segment, **ollama_segments_analysis(segment["text"])} for segment in rs], whisper_result)
@@ -443,7 +455,7 @@ def process_video(video_id, crop):
         analysis['sentences'] = [{"text": text.strip(), "step1": "", "step2": ""} for text in analysis["split"]]
 
     # 翻译
-    segments_analysis = load_or_execute(f"{cache_dir}/ollama_translate.json", lambda objs: [{**segment, "sentences": ollama_translate(segment["sentences"])} for segment in objs], segments_analysis)
+    segments_analysis = load_or_execute(f"{cache_dir}/ollama_translate.json", lambda objs: [{**segment, "sentences": ollama_translate(segment["sentences"], language_from)} for segment in objs], segments_analysis)
 
     # 查找句子时间
     for index, analysis in enumerate(segments_analysis):
@@ -452,10 +464,6 @@ def process_video(video_id, crop):
     # 写入字幕文件
     subtitle_file = f"{cache_dir}/subtitle.ass"
     write_subtitle(segments_analysis, subtitle_file)
-
-    # 如果需要裁剪
-    if crop:
-        input_video = crop_video(input_video, crop)
 
     # 字幕出现的最早时间
     start_time = 0
@@ -469,7 +477,7 @@ def process_video(video_id, crop):
     logging.info(f"input_video_base_name: {input_video_base_name}")
 
     title_translate = ollama_translate([{"text": input_video_base_name.strip(), "step1": "", "step2": ""}])
-    output_video_base_name = title_translate[0]['step2']
+    output_video_base_name = "[双语字幕]" + title_translate[0]['step1']
 
     # 嵌入字幕
     embed_subtitles(Path(input_video).absolute(), Path(subtitle_file).absolute().as_posix(), rf"{Path(cache_dir).absolute()}\{output_video_base_name}.mp4", start_time)
@@ -481,7 +489,7 @@ if __name__ == "__main__":
     # print([video_info['id'] for video_info in video_info_list])
 
     ids = [
-        '_HcH1gjKmuA',
+        '6rpwfIPcPqg',
     ]
     for id in ids:
-        process_video(id, None)
+        process_video(id, "japanese")
