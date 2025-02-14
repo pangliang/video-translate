@@ -8,6 +8,7 @@ from os import mkdir, makedirs
 import json5
 import yt_dlp
 import dotenv
+import requests
 
 from pathlib import Path
 
@@ -25,6 +26,8 @@ ffmpeg_dir="D:/ffmpeg-6.1.1-essentials_build"
 model_llama3 = "llama3.1:8b"
 model_qwen25_7b = "qwen2.5:7b"
 model_qwen25_14b = "qwen2.5:14b"
+model_deepseek_7b = "deepseek-r1:7b"
+model_deepseek_14b = "deepseek-r1:14b"
 model=model_qwen25_14b
 
 client = OpenAI(
@@ -124,6 +127,7 @@ def ollama_segments_analysis(text: str) -> str:
                     2. You can also segment at conjunctions (such as "and", "but", "because", "when", "then", "if", "so", "that"). 
                     3. It can also be divided according to sentence structure, such as long inverted sentences, subordinate clauses, etc.
                     4. Output each sentence in sequence. For example, ["this is the first part,", "this is the second part."]
+                    5. Please provide your answer in the following <output-format> and without any additional information.
                 </rules>
                 <examples>
                     <example>
@@ -157,8 +161,10 @@ def ollama_segments_analysis(text: str) -> str:
                 # temperature=0.8,
                 messages=messages,
             )
-            logging.info(response.choices[0].message.content)
-            return json5.loads(response.choices[0].message.content)
+            content = response.choices[0].message.content
+            logging.info(content)
+
+            return json5.loads(content)
         except Exception as e:
             logging.error("execute ollama_translate failed, retry %d, error %s" % (i, e))
 
@@ -386,6 +392,7 @@ def download_video(vieo_id, output_dir):
     }
 
     filename = None
+    thumbnail_url = None
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)  # 获取视频信息
         logging.info({
@@ -393,9 +400,25 @@ def download_video(vieo_id, output_dir):
             "thumbnail": info['thumbnail'],
         })
 
+        thumbnail_url = info['thumbnail']
+
         # 根据模板生成文件名
         filename = f"{info['title']}.{info['ext'] or 'mp4'}"
         filename = ydl.prepare_filename(outtmpl= rf"{output_dir}\{filename}", info_dict=info)
+
+    thumbnail_suffix = os.path.splitext(thumbnail_url)[1]
+    thumbnail = rf"{output_dir}\{"thumbnail" + thumbnail_suffix}"
+
+    # 不存在则下载
+    if not os.path.exists(thumbnail):
+        logging.info(f"下载视频缩略图 {thumbnail_url}")
+        response = requests.get(thumbnail_url, proxies={'https': proxy})
+        if response.status_code == 200:
+            with open(thumbnail, "wb") as f:
+                f.write(response.content)
+            logging.info(f"封面已下载为 {thumbnail}")
+        else:
+            logging.info(f"下载视频缩略图失败: {response}")
 
     if os.path.exists(filename):
         logging.info(f"文件 {filename} 已存在，跳过下载。")
@@ -489,7 +512,7 @@ if __name__ == "__main__":
     # print([video_info['id'] for video_info in video_info_list])
 
     ids = [
-        '6rpwfIPcPqg',
+        'OUzW2ssrgtU',
     ]
     for id in ids:
-        process_video(id, "japanese")
+        process_video(id, "english")
