@@ -1,3 +1,10 @@
+# 油管视频搬运半自动脚本
+* 油管视频下载
+*  whisper 语音提取文案
+* 大模型翻译
+* 大模型润色
+* 字幕镶嵌
+
 # 安装
 * faster-whisper 模型
     * git clone 排除大文件
@@ -9,3 +16,5 @@
     * pip install ./torch-2.5.1+cu124-cp312-cp312-win_amd64.whl
 * ollama
   * https://ollama.com/download
+* ffmpeg
+  * 下载放到本地后修改 `ffmpeg_dir` 变量

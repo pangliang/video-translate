@@ -164,6 +164,11 @@ def ollama_segments_analysis(text: str) -> str:
             content = response.choices[0].message.content
             logging.info(content)
 
+            # # 把<think></think>标签中的内容和标签都删除
+            # content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+            # content = re.sub(r"```json(.*?)```", r"\1", content, flags=re.DOTALL)
+            # logging.info(content)
+
             return json5.loads(content)
         except Exception as e:
             logging.error("execute ollama_translate failed, retry %d, error %s" % (i, e))
@@ -311,8 +316,8 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Chinese,Source Sans Pro,18,&H0000D9FC,&H00000000,&H00000000,&H40000000,1,0,0,0,100,100,0,0,4,3,1,2,0,0,10,0
-Style: English,Source Sans Pro,14,&H00FFFFFF,&H00000000,&H00000000,&H40000000,1,1,0,0,100,100,0,0,4,3,1,2,0,0,10,0
+Style: Chinese,SimHei,16,&H0000D9FC,&H00000000,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,10,10,10,1
+Style: English,Arial,12,&H00FFFFFF,&H00000000,&H00000000,&H80000000,0,1,0,0,100,100,0,0,1,4,1,2,10,10,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -407,6 +412,7 @@ def download_video(vieo_id, output_dir):
         filename = ydl.prepare_filename(outtmpl= rf"{output_dir}\{filename}", info_dict=info)
 
     thumbnail_suffix = os.path.splitext(thumbnail_url)[1]
+    thumbnail_suffix = thumbnail_suffix.split('?')[0]
     thumbnail = rf"{output_dir}\{"thumbnail" + thumbnail_suffix}"
 
     # 不存在则下载
@@ -461,7 +467,7 @@ def flat_playlist(playlist_id):
         if 'entries' in playlist_info:
             return [entry for entry in playlist_info['entries']]
 
-def process_video(video_id, language_from='english'):
+def process_video(video_id, language_from='english', start_time=0):
     # 每个视频一个缓存文件夹
     cache_dir = rf".cache\{video_id}"
     makedirs(name=f"{cache_dir}", mode=755, exist_ok=True)
@@ -488,9 +494,6 @@ def process_video(video_id, language_from='english'):
     subtitle_file = f"{cache_dir}/subtitle.ass"
     write_subtitle(segments_analysis, subtitle_file)
 
-    # 字幕出现的最早时间
-    start_time = 0
-
     input_video_base_name = os.path.splitext(input_video)[0]
 
     # 去除 ‘.cache\\ggWLvh484hs\\’, 'ggWLvh484hs'可能为任意内容
@@ -512,7 +515,7 @@ if __name__ == "__main__":
     # print([video_info['id'] for video_info in video_info_list])
 
     ids = [
-        'OUzW2ssrgtU',
+        ('tILXLxMTmgA', 0),
     ]
-    for id in ids:
-        process_video(id, "english")
+    for id, start_time in ids:
+        process_video(id, "english", start_time)
